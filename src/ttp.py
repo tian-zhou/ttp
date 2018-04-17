@@ -117,6 +117,7 @@ class TTP:
             del self.f_buf[0]
         self.f_buf.append(f)
 
+
     def intent_pred(self):
         # to_do
         # do something based on self.z_buf
