@@ -47,18 +47,16 @@ class TTP:
 
         # init the publisher for intent
         self.intent_pub = rospy.Publisher('intent_pred', Float32, queue_size=10)
-        self.f_buf_size = 20
-        self.f_buf = []
-        self.zprev = None
-
+        self.z_buf_size = 20
+        self.z_buf = []
+        
         # init the publisher for object
         self.item_pub = rospy.Publisher('item_pred', String, queue_size=10)
         self.item_id = 0
 
         # init the signal processing unit
         self.dsp = DSP()
-        self.mu = None
-        self.sigma = None
+        
 
     def grace_exit(self, exit_msg):
         print "!" * 20
@@ -83,46 +81,40 @@ class TTP:
         
     def mm_msg_callback(self, msg):
         # decode the msg into the format that we want
-        raw = self.dsp.decode_packet(msg.data)
-
-        # fill data frame and get relevant data points
-        self.dsp.df.fillDataFrame(raw)
-        x, Name2Index, Index2Name = self.dsp.df.GetRelevantData()
-        # for i in range(x.shape[1]):
-            # print Index2Name[i], x[0, i]
+        df, df0 = self.dsp.decode_packet(msg.data)
         
-        # all the preprocessing steps
+        x = df.loc[0].values.flatten() # shape (num_raw_columns,)
+
+        # clip outlier
+        self.dsp.clip_outlier(x) 
+
+        # normalize
+        self.dsp.scale(x, method='standard')
+
         # smooth
-        if self.zprev is None:
-            z = x
-        else:        
-            z = self.dsp.expSmooth(x, self.zprev, alpha=0.2)
-        self.zprev = z
-
-        if 0:
-            # to_do, load the means and stds for normalization
-            print z.shape
-            self.mu = [0 for _ in z.shape[1]]
-            self.sigma = [1 for _ in z.shape[1]]
-            z = self.dsp.normalize(z, self.mu, self.sigma)
-
-        # get feature
-        f, channelName = self.dsp.calcFeature(z, Index2Name)
-        # print channelName
-        self.feat_dim = len(channelName)
-        # print f.shape
+        z = self.dsp.expSmooth(x, self.z_buf[-1], alpha=0.2) if len(self.z_buf) else x
 
         # keep a buffer of length self.z_buf_size
-        if len(self.f_buf) >= self.f_buf_size:
-            del self.f_buf[0]
-        self.f_buf.append(f)
+        if len(self.z_buf) >= self.z_buf_size:
+            del self.z_buf[0]
+        self.z_buf.append(z)
 
+        # encode features (LoG, Gabor etc)
+        en_buf, encode_feat_names = self.dsp.encode_features(self.z_buf, 
+                                                self.dsp.good_feat_names)
 
+        # select features
+        self.select_feat_names = list(pd.read_excel('../model/feature_info.xlsx', 
+                                sheetname='feature_selection')['Name'])
+        self.f_buf = self.dsp.select_features(en_buf, encode_feat_names, select_feat_names)
+        self.feat_dim = len(self.select_feat_names)
+
+        
     def intent_pred(self):
         # to_do
         # do something based on self.z_buf
         # it contains previous points ([0] is the oldest, [-1] is the latest)
-        if len(self.f_buf) != self.f_buf_size:
+        if len(self.z_buf) != self.z_buf_size:
             print "buffer not fully inited, return unknown (-1)"
             return -1, -1
 
