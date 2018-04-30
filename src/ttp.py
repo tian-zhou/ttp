@@ -72,7 +72,7 @@ class TTP:
         print '-' * 30
         print "loaded LSTM model at %s" % model_path
 
-    def load_database(self, landmark_path):
+    def load_landmarks(self, landmark_path):
         self.df_landmark = pd.read_csv(landmark_path)
         print '-' * 30
         print 'loaded landmark_path at: %s' % landmark_path   
@@ -105,16 +105,15 @@ class TTP:
 
         # select features
         self.select_feat_names = list(pd.read_excel('../model/feature_info.xlsx', 
-                                sheetname='feature_selection')['Name'])
-        self.f_buf = self.dsp.select_features(en_buf, encode_feat_names, select_feat_names)
+                                sheetname='fs_identity')['Name'])
+        self.f_buf = self.dsp.select_features(en_buf, encode_feat_names, self.select_feat_names)
         self.feat_dim = len(self.select_feat_names)
 
-        
     def intent_pred(self):
         # to_do
-        # do something based on self.z_buf
+        # do something based on self.f_buf
         # it contains previous points ([0] is the oldest, [-1] is the latest)
-        if len(self.z_buf) != self.z_buf_size:
+        if len(self.f_buf) != self.z_buf_size:
             print "buffer not fully inited, return unknown (-1)"
             return -1, -1
 
@@ -144,11 +143,11 @@ class TTP:
         return item, item_confi
 
     def teleop(self):
-        print "\n=== task object status==="
+        print "\n=== available task objects (menu, quit)==="
         c = raw_input('Enter step for the next task object: ')
         if c == 'menu':
             print 'menu: ', self.df_landmark['name'].values
-        if c.upper() in ['Q', 'QUIT']:
+        if c.upper() in ['QUIT']:
             print "done, exit program"
             self.grace_exit('done')
         return c
@@ -191,8 +190,11 @@ class TTP:
             rate.sleep()
             # print "predicted intent %.2f, item %s" % (intent, item)
 
-if __name__ == '__main__':
+def main():
     ttp = TTP(mode='teleop')
     ttp.load_keras_model(model_path = '/home/tzhou/Workspace/catkin_ws/src/ttp/model/my_model.h5')
-    ttp.load_database(landmark_path = '/home/tzhou/Workspace/catkin_ws/src/ttp/data/landmark_chair.csv')
+    ttp.load_landmarks(landmark_path = '/home/tzhou/Workspace/catkin_ws/src/ttp/data/chair_new.csv')
     ttp.run()
+
+if __name__ == '__main__':
+    main()

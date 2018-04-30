@@ -77,11 +77,12 @@ class PATH_PLAN:
         # init arduino for magnet
         self.arduino = ARDUINO()
         self.arduino.connect()
-        self.tool_in_hand = False
-
-    def read_landmarks(self, filename):
-        self.df_landmark = pd.read_csv(filename)
-        print self.df_landmark
+        
+    def load_landmarks(self, landmark_path):
+        self.df_landmark = pd.read_csv(landmark_path)
+        print '-' * 30
+        print 'loaded landmark_path at: %s' % landmark_path   
+        print self.df_landmark['name'].to_string(index=False)
 
     def intent_msg_callback(self, msg):
         self.intent_pred = msg.data
@@ -96,8 +97,8 @@ class PATH_PLAN:
 
     def mm_msg_callback(self, msg):
         # decode the msg into the format that we want
-        raw = self.dsp.decode_packet(msg.data)
-        self.dsp.df.fillHumanPose(raw)
+        # raw = self.dsp.decode_packet(msg.data)
+        # self.dsp.df.fillHumanPose(raw)
 
         # now think about which joints of human should we worry about
         # and how to represent them
@@ -107,7 +108,11 @@ class PATH_PLAN:
         #   ShoulderLeft, ShoulderRight,
         #   ElbowLeft, ElbowRight   !!! important
         #   HandLeft, HandRight     !!! important
-        self.human_pose = self.dsp.df.kinect
+        # self.human_pose = self.dsp.df.kinect
+
+        # fake it
+        self.human_pose = 'fake'
+        pass 
 
     def reach_target(self, item_name, destination_only=True):
         # get the position for the target object
@@ -118,7 +123,7 @@ class PATH_PLAN:
 
         targetJp = []
         for i in range(7):
-            targetJp.append(df_select.iloc[0, 2+i])
+            targetJp.append(df_select.iloc[0, i+1])
         # pprint('targetJp', targetJp)
         path = self.plan_a_path(targetJp)
         self.execute_path(path, destination_only)
@@ -143,24 +148,24 @@ class PATH_PLAN:
             
             # pick it up
             self.reach_target(self.item_pred)
-            self.arduino.setMagnet(1)
-            time.sleep(0.2)
-            self.tool_in_hand = True
+            self.arduino.setMagnet(5)
+            time.sleep(0.5)
 
             # move to ready
             self.reach_target("ready")
             
             # wait for intent to be 1, and drop
             while 1:
-                # move to human, do one of the three
-                # 1) wait 2 seconds for human to pick it, then turn off magnet
-                # 2) when force sensor reading changes a lot, turn off
+                # move to exchange pad area, do one of the three
+                # 1) just drop it
+                # 2) wait for 2 seconds for human to pick it, then drop it if human does not respond
+                # 3) when force sensor reading changes a lot, turn off
                 if self.intent_pred:
                     self.reach_target("deliver")
                     self.arduino.setMagnet(0)
                     #self.reach_target("deliver_up")
-                    self.tool_in_hand = False
                     break
+                    
             self.reach_target("ready")
 
     def plan_a_path(self, targetJp):
@@ -232,8 +237,11 @@ class PATH_PLAN:
     def run(self):
         while not rospy.is_shutdown():
             self.execute_command()
-            
-if __name__ == '__main__':
+          
+def main():
     path_plan = PATH_PLAN()
-    path_plan.read_landmarks('/home/tzhou/Workspace/catkin_ws/src/ttp/data/landmark_chair.csv')
+    path_plan.load_landmarks('/home/tzhou/Workspace/catkin_ws/src/ttp/data/chair_new.csv')
     path_plan.run()
+
+if __name__ == '__main__':
+    main()

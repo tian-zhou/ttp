@@ -259,8 +259,17 @@ if args.gvfs:
 # Connect
 print "Connecting to:"
 print "    " + wamStr(w, maxNameLen(wams))
+print "tian lalalala"
 stdout.flush()
 
+# Write IP down into a local file
+found_wam_IP = wams[0][1]
+text_file = open("../model/WAM_IP.txt", "w")
+text_file.write(found_wam_IP)
+text_file.close()
+print "found WAM IP %s written into ../model/WAM_IP.txt" % found_wam_IP
+
+# Connect with WAM via SSH
 try:
     subprocess.call(["ssh", args.user + "@" + w[1]])
 except KeyboardInterrupt:

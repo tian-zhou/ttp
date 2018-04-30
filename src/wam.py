@@ -26,6 +26,7 @@ License:
 import sys
 import rospy
 from std_msgs.msg import Float32MultiArray
+from geometry_msgs.msg import Pose
 from sensor_msgs.msg import JointState
 import time
 import socket
@@ -43,15 +44,17 @@ class WAM:
         rospy.init_node('wam_node')
         
         # everything about publishing robot joint state
-        self.wam_joint = None
         self.joint_pub = rospy.Publisher('joint_states', JointState, queue_size=10)
         self.joint_msg = JointState()
         self.joint_msg.name = ['wam/base_yaw_joint', 'wam/shoulder_pitch_joint', \
             'wam/shoulder_yaw_joint', 'wam/elbow_pitch_joint', 'wam/wrist_yaw_joint', \
             'wam/wrist_pitch_joint', 'wam/palm_yaw_joint']
-        self.joint_rate = rospy.Rate(10)
         self.joint_msg_sep = 0 
 
+        # everything about publishing robot cart state
+        self.cart_pub = rospy.Publisher('cart_states', Pose, queue_size=10)
+        self.cart_msg = Pose()
+        
         # init the subscriber now
         rospy.Subscriber("wam_bridge_planned_path", Float32MultiArray, self.path_msg_callback)
         self.path_point = None
@@ -71,7 +74,11 @@ class WAM:
 
     def init_socket(self, host, port, buflen):
         # init socket with Multimodal.exe in Windows C++
-        
+        if host == 'local_file':
+            file = open("/home/tzhou/Workspace/catkin_ws/src/ttp/model/WAM_IP.txt", "r") 
+            host = file.read()
+            print "recovered WAM IP %s from local file..." % host
+
         # create a socket object
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.buflen = buflen
@@ -89,9 +96,17 @@ class WAM:
                 continue
 
         print "Built socket connection with WAM PC..."
+        print "Heartbeat started to get real-time robot joint positions..."
+        print "Wait for path planning result to move the robot..."
     
-    def query_joint_position(self):
+    def query_joint_pose(self):
         self.socket.send('2')
+        time.sleep(0.1)
+        pac = self.socket.recv(self.buflen)
+        return pac 
+
+    def query_cart_pose(self):
+        self.socket.send('9')
         time.sleep(0.1)
         pac = self.socket.recv(self.buflen)
         return pac 
@@ -100,6 +115,19 @@ class WAM:
         assert (len(target)==7)
         msg = '7 ' + ''.join([str(i)+' ' for i in target])
         print "move_joint msg: %s" % msg
+        self.socket.send(msg)
+        time.sleep(0.1)
+        pac = self.socket.recv(self.buflen)
+        assert (pac == 'complete')
+
+    def move_cart(self, target, fixquat):
+        assert (len(target)==4)
+        msg = '8 ' + ''.join([str(i)+' ' for i in target])
+        if fixquat:
+            msg += '1 '
+        else:
+            msg += '0 '
+        print "move_cart msg: %s" % msg
         self.socket.send(msg)
         time.sleep(0.1)
         pac = self.socket.recv(self.buflen)
@@ -113,7 +141,7 @@ class WAM:
     def path_msg_callback(self, msg):
         self.path_point = msg.data
         
-    def decode_robot_joint_state_and_publish(self, pac):
+    def publish_joint_pose(self, pac):
         pac = pac.split()[:7]
         robot_pos = [float(s[:8]) for s in pac]
         wam_joint = robot_pos[0:7]
@@ -126,11 +154,23 @@ class WAM:
         self.joint_msg.header.stamp.secs = int(current_time)
         self.joint_msg.header.stamp.nsecs = int((current_time-int(current_time))*1e9)
         self.joint_pub.publish(self.joint_msg)
+
+    def publish_cart_pose(self, pac):
+        # publish current cart position
+        pac = pac.split()[:8]
+        cart_pos = [float(s[:8]) for s in pac]
+        
+        self.cart_msg.position.x = cart_pos[1]
+        self.cart_msg.position.y = cart_pos[2]
+        self.cart_msg.position.z = cart_pos[3]
+        self.cart_msg.orientation.w = cart_pos[4]
+        self.cart_msg.orientation.x = cart_pos[5]
+        self.cart_msg.orientation.y = cart_pos[6]
+        self.cart_msg.orientation.z = cart_pos[7]
+
+        self.cart_pub.publish(self.cart_msg)
             
     def notThereYet(self, target, current, thres):
-        if not target:
-            print "target not inited..."
-            return 0
         # pprint('decoded joint_states', current)
         # pprint('decoded trget_joints', target)
         offset = np.subtract(current, target)
@@ -140,9 +180,15 @@ class WAM:
     def run(self):
         rospy.on_shutdown(self.clean_shutdown)
         while not rospy.is_shutdown():
-            pac = self.query_joint_position()
-            self.decode_robot_joint_state_and_publish(pac)
-                
+            pac = self.query_joint_pose()
+            self.publish_joint_pose(pac)
+            
+            pac = self.query_cart_pose()
+            self.publish_cart_pose(pac)
+
+            if not self.path_point:
+                continue
+
             if self.notThereYet(self.path_point, self.joint_msg.position, thres=0.1):
                 self.move_joint(self.path_point)
                
@@ -151,7 +197,7 @@ class WAM:
 if __name__ == '__main__':
     try:
         wam = WAM()
-        wam.init_socket(host='128.46.125.213', port=4000, buflen=256)
+        wam.init_socket(host='local_file', port=4000, buflen=256)
         wam.run()
     except KeyboardInterrupt:
         print("Ok ok, keyboard interrupt, quitting")

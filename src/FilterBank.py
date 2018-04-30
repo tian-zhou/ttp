@@ -37,10 +37,11 @@ class FilterBank():
         if full == True, creat all 18 filtuers
         if full == False, only 6 of them
         """
-        if full:
-            print "Create FULL version of filter dict (16 in total)"
-        else:
-            print "Create Simple version filter dict (only 6 filter)"
+        
+        # if full:
+        #     print "Create FULL version of filter dict (16 in total)"
+        # else:
+        #     print "Create Simple version filter dict (only 6 filter)"
 
         self.kernelDict = collections.OrderedDict()
 
@@ -346,7 +347,7 @@ class FilterBank():
         return np.array(XBWs).T, np.array(XBWsNames)
 
 def main():
-    filt = FilterBank(full=True)
+    filt = FilterBank(full=False)
     filt.showFilterBank()
 
 

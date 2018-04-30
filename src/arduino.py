@@ -79,11 +79,11 @@ class ARDUINO():
 
     def setMagnet(self, level):
         # level in range [0,5]
-        print "set magnet level: %i" % level
+        # print "set magnet level: %i" % level
         level_255 = int(255.0*(level/5.0))
         msg = "a " + str(level_255) + " *"
         self.ser.write(msg)
-        sleep(1)
+        # sleep(1)
 
 def main():
     arduino = ARDUINO()
@@ -92,7 +92,9 @@ def main():
     f = arduino.readForceSensor()
     print 'force feedback:', f 
     
-    arduino.setMagnet(0)
+    force = 0
+    print "set force %i" % force
+    arduino.setMagnet(force)
         
         
 if __name__ == '__main__':

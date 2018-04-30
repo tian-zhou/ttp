@@ -27,19 +27,30 @@ from FilterBank import FilterBank
 
 class DSP:
     def __init__(self):
-        feat_names = list(pd.read_excel('../model/feature_info.xlsx', sheetname='descriptor')['Name'])
-        feat_names.append('abcd1234')
+        self.folder = '/home/tzhou/Workspace/catkin_ws/src/ttp'
+        feat_names = list(pd.read_excel(self.folder + '/model/feature_info.xlsx', sheetname='descriptor')['Name'])
         self.feat_names = feat_names
 
-        self.meta = pd.read_excel('../model/feature_info.xlsx', sheetname='selected')
+        self.meta = pd.read_excel(self.folder + '/model/feature_info.xlsx', sheetname='selected')
         # df_feature_meta has columns for clipping and normalization
         # Name | mean | std | min | max | lower_fence | upper_fence
         self.good_feat_names = list(self.meta['Name'])
         
     def decode_packet(self, pac):
+        # for some reason, sometimes the pac will contain some weird chars at the end of the buffer
+        # we should remove them
+        # solution -> find first abcd1234, and trim all stuff after that
+        pac = pac[:pac.find('abcd1234')]
         pac = pac.split()
+        pac[0] = pac[0][-23:] # just took the time out
+        # print pac 
+        # print '\n\n'
+        # print "len(pac)", len(pac)
+        # print "len(feat_names)", len(self.feat_names)
         df0 = pd.DataFrame([pac], columns = self.feat_names)
-        df0 = df0.drop('abcd1234', 1)
+        # print df0
+        # print df0['realtime_str']
+        
         df0.insert(1, 'realtime_obj', pd.to_datetime(df0['realtime_str'], format='%Y_%m_%d_%H_%M_%S_%f'))
         df0 = df0.drop('realtime_str', 1)
 
@@ -55,27 +66,23 @@ class DSP:
         the value in the index column can be used to query element in x
         # meta: Name | mean | std | min | max | lower_fence | upper_fence
         """
-        for i, col in enumerate(self.good_feat_names):
-            row = self.meta.loc[self.meta['Name'] == col]
-            if not pd.isnull(row['lower_fence'].values[0]):
-                x[i] = max(x[i], row['lower_fence'].values[0])
-            if not pd.isnull(row['upper_fence'].values[0]):
-                x[i] = min(x[i], row['upper_fence'].values[0])
+        x[12] = max(-0.4, x[12]) # 'Kinect_JointType_HandRight_X'
+        x[13] = max(-0.6, x[13]) # 'Kinect_JointType_HandRight_Y'
+        x[14] = min( 1.5, x[14]) # 'Kinect_JointType_HandRight_Z'
         
     def scale(self, x, method):
         """
         method \in {'standard', 'minmax'}
         # meta: Name | mean | std | min | max | lower_fence | upper_fence
         """
-        for i, col in enumerate(self.good_feat_names):
-            row = self.meta.loc[self.meta['Name'] == col]
-            if method == 'standard':
-                subtract = row['mean'].values[0]
-                divider = row['std'].values[0]
-            elif method == 'minmax':
-                subtract = row['min'].values[0]
-                divider = row['max'].values[0] - row['min'].values[0]
-            x[i] = (x[i] - subtract)/divider
+        if method == 'standard':
+            subtract = self.meta['mean'].values
+            divider = self.meta['std'].values
+        elif method == 'minmax':
+            subtract = self.meta['min'].values
+            divider = self.meta['max'].values - self.meta['min'].values
+        x = (x - subtract)/divider
+        return x
 
     def expSmooth(self, x, zprev, alpha):
         """
@@ -98,8 +105,9 @@ class DSP:
             ordered by [feature0_filter0, feature0_filter1, ...]
         encode_feat_names is the new name for the features
         """
+        z_buf = np.array(z_buf)
         assert(z_buf.shape[1] == len(feat_names))
-        fb = FilterBank(full = True)
+        fb = FilterBank(full = False)
         xf = fb.applyFilter(z_buf, filterName = 'all', GaussBlur = False)
         en_buf, encode_feat_names = fb.convertFilteredToMatrix(xf, feat_names)
         return en_buf, encode_feat_names
@@ -130,10 +138,14 @@ def main():
     x = df.loc[0].values.flatten() # shape (num_raw_columns,)
     
     # clip outlier
+    # print 'x before clip outlier \n', x
     dsp.clip_outlier(x) 
+    # print 'x after clip outlier \n', x
     
     # normalize
-    dsp.scale(x, method='standard')
+    # print 'x before scale \n', x
+    x = dsp.scale(x, method='standard')
+    # print 'x after scale \n', x
     
     # smooth
     z = dsp.expSmooth(x, 10*np.random.rand(x.shape[0]), alpha=0.2)
@@ -146,8 +158,8 @@ def main():
     en_buf, encode_feat_names = dsp.encode_features(z_buf, feat_names)
     
     # select features
-    select_feat_names = list(pd.read_excel('../model/feature_info.xlsx', 
-                                sheetname='feature_selection')['Name'])
+    select_feat_names = list(pd.read_excel(dsp.folder + '/model/feature_info.xlsx', 
+                                sheetname='fs_identity')['Name'])
     f_buf = dsp.select_features(en_buf, encode_feat_names, select_feat_names)
     
 if __name__ == '__main__':

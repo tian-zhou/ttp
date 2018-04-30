@@ -63,7 +63,7 @@ class MM_BRIDGE:
         print "Socket connection with Multimodal.exe (Windows) is built..."
         
     def run(self):
-        rate = rospy.Rate(10)
+        rate = rospy.Rate(20)
         while not rospy.is_shutdown():
             # get a packet from Multimodal.exe
             if 0:
