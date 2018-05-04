@@ -25,7 +25,7 @@ License:
 
 import sys
 import rospy
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import String
 from geometry_msgs.msg import Pose
 from sensor_msgs.msg import JointState
 import time
@@ -56,10 +56,8 @@ class WAM:
         self.cart_msg = Pose()
         
         # init the subscriber now
-        rospy.Subscriber("wam_bridge_planned_path", Float32MultiArray, self.path_msg_callback)
-        self.path_point = None
-
-        # self.socket_mutex = Lock()
+        rospy.Subscriber("wam_command", String, self.wam_command_msg_callback)
+        self.move_wam_msg = None
 
     def clean_shutdown(self):
         """
@@ -101,52 +99,29 @@ class WAM:
     
     def query_joint_pose(self):
         self.socket.send('2')
-        time.sleep(0.1)
+        time.sleep(0.01)
         pac = self.socket.recv(self.buflen)
-        return pac 
+        return pac
 
     def query_cart_pose(self):
         self.socket.send('9')
-        time.sleep(0.1)
+        time.sleep(0.01)
         pac = self.socket.recv(self.buflen)
-        return pac 
+        return pac
 
-    def move_joint(self, target):
-        assert (len(target)==7)
-        msg = '7 ' + ''.join([str(i)+' ' for i in target])
-        print "move_joint msg: %s" % msg
-        self.socket.send(msg)
-        time.sleep(0.1)
-        pac = self.socket.recv(self.buflen)
-        assert (pac == 'complete')
-
-    def move_cart(self, target, fixquat):
-        assert (len(target)==4)
-        msg = '8 ' + ''.join([str(i)+' ' for i in target])
-        if fixquat:
-            msg += '1 '
-        else:
-            msg += '0 '
-        print "move_cart msg: %s" % msg
-        self.socket.send(msg)
-        time.sleep(0.1)
-        pac = self.socket.recv(self.buflen)
-        assert (pac == 'complete')
-    
     def go_home(self):
         print "go home WAM you are drunk!!!"
         self.socket.send('4')
         time.sleep(1)
         
-    def path_msg_callback(self, msg):
-        self.path_point = msg.data
-        
+    def wam_command_msg_callback(self, msg):
+        self.move_wam_msg = msg.data
+
     def publish_joint_pose(self, pac):
         pac = pac.split()[:7]
         robot_pos = [float(s[:8]) for s in pac]
         wam_joint = robot_pos[0:7]
         
-        # publish current joint position
         self.joint_msg.position = wam_joint 
         self.joint_msg.header.seq = self.joint_msg_sep
         self.joint_msg_sep += 1
@@ -156,7 +131,6 @@ class WAM:
         self.joint_pub.publish(self.joint_msg)
 
     def publish_cart_pose(self, pac):
-        # publish current cart position
         pac = pac.split()[:8]
         cart_pos = [float(s[:8]) for s in pac]
         
@@ -169,14 +143,7 @@ class WAM:
         self.cart_msg.orientation.z = cart_pos[7]
 
         self.cart_pub.publish(self.cart_msg)
-            
-    def notThereYet(self, target, current, thres):
-        # pprint('decoded joint_states', current)
-        # pprint('decoded trget_joints', target)
-        offset = np.subtract(current, target)
-        dis = np.linalg.norm(offset)
-        return dis>thres
-
+    
     def run(self):
         rospy.on_shutdown(self.clean_shutdown)
         while not rospy.is_shutdown():
@@ -186,12 +153,14 @@ class WAM:
             pac = self.query_cart_pose()
             self.publish_cart_pose(pac)
 
-            if not self.path_point:
-                continue
+            # we have to do it here, otherwise the callback function
+            # mess up with the query joint/cart poses process
+            if self.move_wam_msg:
+                self.socket.send(self.move_wam_msg)
+                time.sleep(0.01)
+                pac = self.socket.recv(self.buflen)
+                assert (pac == 'complete')
 
-            if self.notThereYet(self.path_point, self.joint_msg.position, thres=0.1):
-                self.move_joint(self.path_point)
-               
         rospy.signal_shutdown("run() finished...")
 
 if __name__ == '__main__':
@@ -205,6 +174,3 @@ if __name__ == '__main__':
     else:
         print("Normal termination")
         sys.exit(2)
-
-    
-

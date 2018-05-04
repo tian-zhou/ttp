@@ -63,8 +63,8 @@ class ARDUINO():
     def readForceSensor(self):
         # send "b" first and read the echoed back msg
         self.write("b *")
-        sleep(0.3)
-
+        sleep(0.5)
+        print "wait for force sensor feedback..."
         # read the msg and decode
         msg = self.read()
         msg_split = msg.split(' ')
@@ -79,7 +79,7 @@ class ARDUINO():
 
     def setMagnet(self, level):
         # level in range [0,5]
-        # print "set magnet level: %i" % level
+        # print "magnet force level: %i" % level
         level_255 = int(255.0*(level/5.0))
         msg = "a " + str(level_255) + " *"
         self.ser.write(msg)
@@ -89,8 +89,8 @@ def main():
     arduino = ARDUINO()
     arduino.connect()
     
-    f = arduino.readForceSensor()
-    print 'force feedback:', f 
+    # f = arduino.readForceSensor()
+    # print 'force feedback:', f 
     
     force = 0
     print "set force %i" % force

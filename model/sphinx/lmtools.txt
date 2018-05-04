@@ -1,0 +1,17 @@
+1. go to   http://www.speech.cs.cmu.edu/tools/lmtool.html              (click on lmtool)
+2. upload a txt file, each line for a sentence all in capital (I am not sure if it's necessary to do such format..)
+3. download the lm and dic files in the next page 
+4. put the downloaded file in this folder
+5. change the name to 1.dic and 1.lm
+
+
+
+FIRST, CREATE A CORPUS FILE consisting of all sentences you would like the decoder to recognize. The sentences should be one to a line (but should not have punctuation symbols). You may not need to exhastively list all possible sentences: the decoder will allow fragments to recombine into new sentences; but the sentences you provide will be preferred. For example:
+
+	THIS IS AN EXAMPLE SENTENCE
+	EACH LINE IS SOMETHING THAT YOU'D WANT YOUR SYSTEM TO RECOGNIZE
+	ACRONYMS PRONOUNCED AS LETTERS ARE BEST ENTERED AS A T_L_A
+	NUMBERS AND ABBREVIATIONS OUGHT TO BE SPELLED OUT FOR EXAMPLE
+	TWO HUNDRED SIXTY THREE ET CETERA
+	YOU CAN UPLOAD A FEW THOUSAND SENTENCES
+	BUT THERE IS A LIMIT

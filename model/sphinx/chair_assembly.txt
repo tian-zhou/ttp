@@ -1,0 +1,10 @@
+ready
+seat
+rail
+left stile
+sticky notes
+tape
+marker
+scissors
+right stile
+thumbtack
