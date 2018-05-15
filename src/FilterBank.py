@@ -27,11 +27,12 @@ class FilterBank():
     input 1D data
     """
 
-    def __init__(self, full):
+    def __init__(self, full, thesis_version):
         self.full = full
-        self.createFilterDict(full)
+        self.thesis_version = thesis_version
+        self.createFilterDict(full, thesis_version)
 
-    def createFilterDict(self, full):
+    def createFilterDict(self, full, thesis_version):
         """
         create the filter dictionary
         if full == True, creat all 18 filtuers
@@ -45,44 +46,54 @@ class FilterBank():
 
         self.kernelDict = collections.OrderedDict()
 
-        # itself
-        self.kernelDict['identity'] = [1]
+        if thesis_version:
+            self.kernelDict['Identity'] = [1]
+            # self.kernelDict['Box'] = [0.33, 0.33, 0.33]
+            self.kernelDict['Sobel'] = [-1, 0, 1]
+            g1 = cv2.getGaussianKernel(ksize=3,sigma=-1).flatten()
+            # self.kernelDict['Canny'] = np.convolve(g1, self.kernelDict['diff'], mode='full')
+            self.kernelDict['LoG'] = np.convolve(g1, [-1, 2, -1], mode='full')
+            # self.kernelDict['Gabor1'] = self.gabor(ksize=5, freq=100, theta=0)
+            # self.kernelDict['Gabor2'] = self.gabor(ksize=5, freq=100, theta=np.pi/2)
+        else:
+            # itself
+            self.kernelDict['identity'] = [1]
 
-        # box filter (moving average, smoothing, LPF)
-        if full:
-            self.kernelDict['box'] = [0.33, 0.33, 0.33]
+            # box filter (moving average, smoothing, LPF)
+            if full:
+                self.kernelDict['box'] = [0.33, 0.33, 0.33]
 
-        # differentiazion filter
-        self.kernelDict['diff'] = [-1, 0, 1]
+            # differentiazion filter
+            self.kernelDict['diff'] = [-1, 0, 1]
 
-        # Gaussian filter
-        g1 = cv2.getGaussianKernel(ksize=3,sigma=-1).flatten()
-        g2 = cv2.getGaussianKernel(ksize=5,sigma=-1).flatten()
-        g3 = cv2.getGaussianKernel(ksize=7,sigma=-1).flatten()
+            # Gaussian filter
+            g1 = cv2.getGaussianKernel(ksize=3,sigma=-1).flatten()
+            # g2 = cv2.getGaussianKernel(ksize=5,sigma=-1).flatten()
+            # g3 = cv2.getGaussianKernel(ksize=7,sigma=-1).flatten()
 
-        if full:
-            self.kernelDict['g1'] = g1
-            self.kernelDict['g2'] = g2
-            self.kernelDict['g3'] = g3
+            if full:
+                self.kernelDict['g1'] = g1
+                self.kernelDict['g2'] = g2
+                self.kernelDict['g3'] = g3
 
-        # 1st order derivative of Gaussian
-        self.kernelDict['dg1'] = np.convolve(g1, self.kernelDict['diff'], mode='full')
-        if full:
-            self.kernelDict['dg2'] = np.convolve(g2, self.kernelDict['diff'], mode='full')
-            self.kernelDict['dg3'] = np.convolve(g3, self.kernelDict['diff'], mode='full')
+            # 1st order derivative of Gaussian
+            self.kernelDict['dg1'] = np.convolve(g1, self.kernelDict['diff'], mode='full')
+            if full:
+                self.kernelDict['dg2'] = np.convolve(g2, self.kernelDict['diff'], mode='full')
+                self.kernelDict['dg3'] = np.convolve(g3, self.kernelDict['diff'], mode='full')
 
-        # 2nd order derivative of Gaussian (LoG)
-        self.kernelDict['log1'] = np.convolve(g1, [-1, 2, -1], mode='full')
-        if full:
-            self.kernelDict['log2'] = np.convolve(g2, [-1, 2, -1], mode='full')
-            self.kernelDict['log3'] = np.convolve(g3, [-1, 2, -1], mode='full')
+            # 2nd order derivative of Gaussian (LoG)
+            self.kernelDict['log1'] = np.convolve(g1, [-1, 2, -1], mode='full')
+            if full:
+                self.kernelDict['log2'] = np.convolve(g2, [-1, 2, -1], mode='full')
+                self.kernelDict['log3'] = np.convolve(g3, [-1, 2, -1], mode='full')
 
-        # gabor filter
-        self.kernelDict['gabor1'] = self.gabor(ksize=5, freq=100, theta=0)
-        self.kernelDict['gabor2'] = self.gabor(ksize=5, freq=100, theta=np.pi/2)
-        if full:
-            self.kernelDict['gabor3'] = self.gabor(ksize=7, freq=200, theta=0)
-            self.kernelDict['gabor4'] = self.gabor(ksize=7, freq=200, theta=np.pi/2)
+            # gabor filter
+            self.kernelDict['gabor1'] = self.gabor(ksize=5, freq=100, theta=0)
+            self.kernelDict['gabor2'] = self.gabor(ksize=5, freq=100, theta=np.pi/2)
+            if full:
+                self.kernelDict['gabor3'] = self.gabor(ksize=7, freq=200, theta=0)
+                self.kernelDict['gabor4'] = self.gabor(ksize=7, freq=200, theta=np.pi/2)
 
     # def add_delay(self, w, location):
     #     assert (w >= 0)
@@ -150,11 +161,19 @@ class FilterBank():
             plt.ylabel(key, fontsize = 20)
             plt.tick_params(axis='both', which='major', labelsize=15)
 
+        plt.figure()
+        for key in self.kernelDict:
+            kernel = self.kernelDict[key]
+            plt.plot(range(len(kernel)), kernel, label=key)
+        plt.title('all kernels')
+        plt.legend(loc='best')
+
         # generate some random data and filter it with all such kernel
         if 1:
             N = 100
             x = np.concatenate((np.zeros(40), np.ones(10), -np.ones(10), np.zeros((40)))) + \
-                    0.0*np.random.randn(N)
+                    0.3*np.random.randn(N)
+
             XF = self.applyFilter(x, filterName = 'all')
             index = 1
             plt.figure()
@@ -165,6 +184,12 @@ class FilterBank():
                 index += 1
                 plt.plot(range(N), XF[key], 'b')
                 plt.ylabel(key)
+
+            plt.figure()
+            for key in self.kernelDict:
+                plt.plot(range(N), XF[key], label=key)
+            plt.legend(loc='best')
+
         plt.show()
 
     def properConv(self, x, h, show=False):
@@ -202,11 +227,24 @@ class FilterBank():
 
         # now convolve
         f = np.convolve(x, h, 'valid')
-
         assert (len(f) == nx)
         return f
 
-    def applyFilter(self, X, filterName, GaussBlur = True):
+    def apply_filter_online(self, X, feat_names):
+        N, M = X.shape
+        assert (N == 5)
+        xf = []
+        new_feat_name = []
+        for j in range(M):
+            for key in self.kernelDict:    
+                f = np.convolve(X[:,j], self.kernelDict[key], 'valid')  
+                xf.append(f[(len(f)-1)/2])
+                new_feat_name.append(feat_names[j] + '_' + key)
+        xf = np.array(xf).reshape(1, -1)
+        assert (xf.shape[1] == len(new_feat_name))
+        return xf, new_feat_name
+
+    def applyFilter(self, X, filterName, GaussBlur = False):
         """
         Description:
             apply the filter (specified by filterName) to the given input X
@@ -347,7 +385,7 @@ class FilterBank():
         return np.array(XBWs).T, np.array(XBWsNames)
 
 def main():
-    filt = FilterBank(full=False)
+    filt = FilterBank(full=False, thesis_version=False)
     filt.showFilterBank()
 
 

@@ -11,7 +11,7 @@ Description:
     6) publish the output (when and what) into the topic robot_control
 
 Sample usage:
-    ttp = TTP(mode='early')
+    ttp = TTP(mode='teleop')
     ttp.run()
 
 Author:
@@ -24,120 +24,123 @@ License:
     GNU General Public License v3
 """
 
+import matplotlib.pyplot as plt
 import rospy
 from std_msgs.msg import Float32, String, Float32MultiArray
 from dsp import DSP
 import keras 
+from keras.utils import plot_model
 import numpy as np
 import readchar
 import pandas as pd
 from datetime import datetime
+from time import time
+from keras.preprocessing.sequence import pad_sequences
 
 class TTP:
-    def __init__(self):
+    def __init__(self, model_path, fs_path, landmark_path, task_path):
+        self.load_keras_model(model_path, fs_path)
+        self.load_landmarks(landmark_path)
+        self.load_task_order(task_path)
+
         # init node for mm_bridge
         rospy.init_node('ttp_node', anonymous=True)
-
-        # init the subscriber
-        rospy.Subscriber("mm_bridge_output", String, self.mm_msg_callback)
 
         # init the publisher for command
         self.cmd_pub = rospy.Publisher('cmd_pred', String, queue_size=10)
         self.item_id = 0
         self.rail_id = 1
         self.thumbtack_id = 1
-        self.cmd_history = []
+        self.cmd_request_history = []
         
         # init the signal processing unit
         self.dsp = DSP()
-        self.z_buf_size = 20
         self.z_buf = []
-        
-    def grace_exit(self, exit_msg):
+        self.z_buf_size = 5 # min 5 timestamps for feature encoding
+        self.f_buf = []
+        self.f_buf_size = 120 # 20 Hz * 6 seconds
+
+        # record firing time 
+        self.last_fire_time = time()
+
+        # init the subscriber at the end when all init is finished
+        rospy.Subscriber("mm_bridge_output", String, self.mm_msg_callback)
+                
+    def grace_exit(self, exit_msg, gohome):
         print "!" * 20
         print '(grace?) exit with message:'
         print '---\n', exit_msg, '\n---'
-        # self.cmd_pub.publish('1,home,1.00,2018_04_30_19_49_32_983000, NA')
-        # print "go home robot you are drunk..."
+        if gohome:
+            self.cmd_pub.publish('1,home,1.00,2018_04_30_19_49_32_983000, NA')
+            print "go home robot you are drunk..."
         print "cmd history:"
-        for c in self.cmd_history:
+        for c in self.cmd_request_history:
             print c
         exit(1)
 
-    def load_keras_model(self, model_path):
+    def load_keras_model(self, model_path, fs_path):
         self.model = keras.models.load_model(model_path)
         print '-' * 30
         print "loaded LSTM model at %s" % model_path
+        print (self.model.summary())
+        # plot_model(self.model, show_shapes=True)
+        self.select_feat_names = list(pd.read_csv(fs_path, header=None)[0].values)
+        self.feat_dim = len(self.select_feat_names)
+        print "loaded Feature Selection at %s" % fs_path
+        print "Selected features\n", self.select_feat_names
 
     def load_landmarks(self, landmark_path):
         self.df_landmark = pd.read_csv(landmark_path)
         print '-' * 30
         print 'loaded landmark_path at: %s' % landmark_path   
         print self.df_landmark['name'].to_string(index=False)     
-        self.requested_order = 1
+        
+    def load_task_order(self, task_path):
+        self.df_task = pd.read_csv(task_path)
+        self.df_task['status'] = 'to_do'
+        print '-' * 30
+        print 'loaded task_path at: %s' % task_path
+        # print self.df_task.info()
+        # print self.df_task.head()
+        # exit()
         
     def mm_msg_callback(self, msg):
         # decode the msg into the format that we want
-        df, df0 = self.dsp.decode_packet(msg.data)
-        
+        df = self.dsp.decode_packet(msg.data)
         x = df.loc[0].values.flatten() # shape (num_raw_columns,)
 
-        # clip outlier
         self.dsp.clip_outlier(x) 
-
-        # normalize
         self.dsp.scale(x, method='standard')
-
-        # smooth
-        z = self.dsp.expSmooth(x, self.z_buf[-1], alpha=0.2) if len(self.z_buf) else x
-
-        # keep a buffer of length self.z_buf_size
-        if len(self.z_buf) >= self.z_buf_size:
-            del self.z_buf[0]
+        z = self.dsp.expSmooth(x, self.z_buf[-1], alpha=0.2) if len(self.z_buf) != 0 else x
         self.z_buf.append(z)
 
-        # encode features (LoG, Gabor etc)
-        en_buf, encode_feat_names = self.dsp.encode_features(self.z_buf, 
-                                                self.dsp.good_feat_names)
+        if len(self.z_buf) < self.z_buf_size:
+            return 
+        elif len(self.z_buf) > self.z_buf_size:
+            del self.z_buf[0]
+        assert len(self.z_buf) == self.z_buf_size
 
-        # select features
-        self.select_feat_names = list(pd.read_excel('../model/feature_info.xlsx', 
-                                sheetname='fs_identity')['Name'])
-        self.f_buf = self.dsp.select_features(en_buf, encode_feat_names, self.select_feat_names)
-        self.feat_dim = len(self.select_feat_names)
+        # encode features (LoG, Gabor etc)
+        en, encode_feat_names = self.dsp.encode_features_online(self.z_buf)        
+        f = self.dsp.select_features(en, encode_feat_names, self.select_feat_names)
+        self.f_buf.append(f)
+        if len(self.f_buf) > self.f_buf_size:
+            del self.f_buf[0]
 
     def intent_pred(self):
-        # to_do
-        # do something based on self.f_buf
-        # it contains previous points ([0] is the oldest, [-1] is the latest)
-        if len(self.z_buf) != self.z_buf_size:
-            print "buffer not fully inited, return unknown (-1)"
-            return -1, -1
-
-        self.model.reset_states()
-        # x_test = np.random.random((1, time_steps, data_dim))
+        if len(self.f_buf) < self.f_buf_size:
+            return -1
+        # the intent_pred is very fast (takes about 0.01 second)    
         x_test = np.array(self.f_buf).reshape(1, self.f_buf_size, self.feat_dim)
-        # fake it
-        x_test = x_test[:, :, :16] # !!! fake it
-        # print 'x_test.shape', x_test.shape
-        y_test_pred_prob = self.model.predict(x_test, batch_size=1)
-        # print 'y_test_pred_prob\n', y_test_pred_prob
-        # print 'y_test_pred_prob.shape', y_test_pred_prob.shape
-        y_test_pred = np.argmax(y_test_pred_prob, 2)[0]
-        # print 'y_test_pred', y_test_pred
-        intent = y_test_pred[-1] # get predict of last timestamp
-        intent_confi = np.abs(y_test_pred_prob[0][-1][0]- y_test_pred_prob[0][-1][1])
-        print "predicted intent is %i with confidence %.2f" %(intent, intent_confi)
-        # intent_confi \in [0, 1), larger is better
-        return intent, intent_confi
+        y_test_pred_prob = self.model.predict(x_test, batch_size=1)[0]
+        intent = y_test_pred_prob[1]
+        return intent
 
     def item_pred(self):
-        # to_do
-        # maybe keep an index for the current item to be used
-        # and then update the index whenever the human has finished the current tool
-        item = 'seat'
-        item_confi = 1
-        return item, item_confi
+        # first, let us fix the order to dictate the steps
+        to_do_tasks = self.df_task.loc[self.df_task['status'] == 'to_do']
+        item = to_do_tasks.iloc[0]['part_name']
+        return item
 
     def make_command_msg(self, item, intent, comment='NA'):
         # msg has the following format
@@ -169,7 +172,7 @@ class TTP:
         msg += '%s,' % datetime.now().strftime('%Y_%m_%d_%H_%M_%S_%f')
         msg += '%s' % comment
         self.item_id += (1 if intent == 1 else 0)
-        self.cmd_history.append(msg)
+        self.cmd_request_history.append(msg)
         return msg
         
     def run_tele(self):
@@ -182,11 +185,23 @@ class TTP:
             if item == 'menu':
                 print 'menu: ', self.df_landmark['name'].values
             if item == 'quit':
-                self.grace_exit('quit program')
+                self.grace_exit('quit program', gohome=False)
+            
+            # map some shortcut names to full name
+            mapping = {}
+            mapping['left'] = 'left stile'
+            mapping['right'] = 'right stile'
+            mapping['notes'] = 'sticky notes'
+            mapping['cut'] = 'scissors'
+            for i in range(1, 17):
+                mapping['tack'+str(i)] = 'thumbtack'+str(i)
+            if item in mapping:
+                print "translate command [%s] => [%s]" % (item, mapping[item])
+                item = mapping[item]
             msg = self.make_command_msg(item, intent=1, comment='teleop')
             if msg:
                 self.cmd_pub.publish(msg)
-        self.grace_exit('teleoperation finished...')
+        self.grace_exit('teleoperation finished...', gohome=True)
     
     def decode_word(self, word):
         """
@@ -239,10 +254,51 @@ class TTP:
                 self.cmd_pub.publish(msg)
                 print 'publish message: [%s]' % msg
                 print '========================='
-        
-        self.grace_exit('speech control finished...')
+        self.grace_exit('speech control finished...', gohome=False)
 
-    def run_early(self):
+    def check_fire(self, intent_history, time_history, confi_thres, active_duration_thres, 
+                    fire_interval_thres):
+        """
+        first, set a look-back window length (e.g., 3 seconds)
+        smooth the history signal in this period
+
+        ===
+        method 1: find local maximum, and if the value at local maximum exceeds
+        a confidence threshold, we fire, and start silencing.
+            problem: if the confi keeps increasing and never reaches local maximum,
+            we cannot fire.
+
+        ===
+        method 2: find the duration where confi exceeds a confidence threshold, 
+        if this continuous duration is longer than a window threshold, we fire.
+            problem: have to work together with the silencing scheme, otherwise
+            we will see multiple firing for the same turn request action
+        """
+        N = len(intent_history)
+        for i in range(N-1, -1, -1):
+            if intent_history[i] > confi_thres:
+                if time() - time_history[i] >= active_duration_thres:
+                    if time() - self.last_fire_time > fire_interval_thres:
+                        if 1:
+                            plt.plot(range(N), confi_thres*np.ones(N), 'g', label='threshold')
+                            plt.plot(range(0, i), intent_history[:i], 'b', label = 'inactive')
+                            plt.plot(range(i, N), intent_history[i:], 'r', label = 'active')
+                            plt.xlabel('discrete time index')
+                            plt.ylabel('intent history')
+                            plt.legend(loc='best')
+                            plt.show()
+                        self.last_fire_time = time()
+                        print "fired at time: ", datetime.now()
+                        return True
+                    else:
+                        remain_time = fire_interval_thres - (time() - self.last_fire_time)
+                        print "waiting for silence period to pass, %.2f seconds left" % remain_time
+                        return False
+            else:
+                break
+        return False
+
+    def run_tt(self):
         """
         since the intent and the item prediction happens non-stop
         we need to think about when to publish this new msg
@@ -250,31 +306,46 @@ class TTP:
         need to think about it        
         """
         rate = rospy.Rate(10)
+        intent_history = []
+        time_history = []
+        print "waiting for feature buffer to be fully inited (need 120 steps)..."
         while not rospy.is_shutdown():
-            item, item_confi = self.item_pred()
-            intent, intent_confi = self.intent_pred()
-            if "something happened here, we continue to predict":
-                continue
-            msg = self.make_command_msg(item, intent=intent, comment='early prediction')
-            self.cmd_pub.publish(msg)
+            item = self.item_pred()
+            intent = self.intent_pred()
             rate.sleep()
-        self.grace_exit('early prediction finished...')
-
+            if intent == -1:
+                continue
+            intent_history.append(intent)
+            time_history.append(time())
+            if self.check_fire(intent_history, time_history, confi_thres = 0.8, active_duration_thres = 0.5, 
+                        fire_interval_thres = 12):
+                # confi_thres in range [0.5, 0.99], the larger, the more misses but more accurate
+                # active_duration_thres = 0.5 # high value for > 0.5 seconds
+                # fire_interval_thres = 12 # 12 seconds: 7 sec for pickup/delivery, and 5 sec for operation
+                msg = self.make_command_msg(item, intent=1, comment='early tt prediction')
+                self.df_task.loc[self.df_task['part_name'] == item, 'status'] = 'done'
+                print self.df_task
+                self.cmd_pub.publish(msg)
+                print 'publish message: [%s]' % msg
+                print '========================='
+        self.grace_exit('early prediction finished...', gohome=False)
+        
     def run(self, mode):
-        if mode not in ['early', 'speech', 'teleop']:
+        if mode not in ['tt', 'speech', 'teleop']:
             rospy.logerr('unrecognized TTP mode %s' % mode)
         if mode == 'teleop':
             self.run_tele()
         elif mode == 'speech':
             self.run_speech()
-        elif mode == 'early':
-            self.run_early()
+        elif mode == 'tt':
+            self.run_tt()
 
 def main():
-    ttp = TTP()
-    ttp.load_keras_model(model_path = '/home/tzhou/Workspace/catkin_ws/src/ttp/model/my_model.h5')
-    ttp.load_landmarks(landmark_path = '/home/tzhou/Workspace/catkin_ws/src/ttp/data/joint_cart.csv')
-    ttp.run(mode='speech') # ['teleop', 'speech', 'early']
+    ttp = TTP(model_path = '/home/tzhou/Workspace/turn_taking/chair_github/model/lstm/LSTM_50.h5', 
+                 fs_path = '/home/tzhou/Workspace/turn_taking/chair_github/model/features/one_model_select_feat_names.csv',
+           landmark_path = '/home/tzhou/Workspace/catkin_ws/src/ttp/data/joint_cart.csv',
+               task_path = '/home/tzhou/Workspace/catkin_ws/src/ttp/data/fix_chair_order.csv')
+    ttp.run(mode='tt') # ['teleop', 'speech', 'tt']
 
 if __name__ == '__main__':
     main()
