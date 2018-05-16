@@ -30,8 +30,6 @@ import time
 from arduino import ARDUINO
 import keyboard
 import cv2
-from datetime import datetime
-
 
 def pprint(name, l):
     l_str = ''.join(['%.3f ' % item for item in l])
@@ -46,8 +44,6 @@ class MOTION_CONTROL:
         rospy.Subscriber("cmd_pred", String, self.cmd_msg_callback)
         self.cmd_queue = pd.DataFrame(columns = ['item_id', 'item_pred', 
                     'intent_pred', 'timestamp', 'comment', 'status'])
-        self.motion_queue = pd.DataFrame(columns = ['item_id', 'item_pred', 'step', 
-                    'motion', 'status', 'timestamp'])
         
         # init the publisher for sending to MoveWAM
         self.wam_command_pub = rospy.Publisher('wam_command', String, queue_size=10)
@@ -88,67 +84,8 @@ class MOTION_CONTROL:
         cmd['intent_pred'] = float(msg_split[2])
         cmd['timestamp'] = msg_split[3]
         cmd['comment'] = msg_split[4]
-        cmd['status'] = 'command arrived'
-        cmd = self.motion_plan(cmd)
+        cmd['status'] = 'wait_in_queue'
         self.cmd_queue = self.cmd_queue.append(cmd, ignore_index=True)
-
-    def motion_plan(self, cmd):
-        # self.motion_queue = pd.DataFrame(columns = ['item_id', 'item_pred', 'step', 
-            # 'motion', 'status', 'timestamp'])
-
-        # check invalid command
-        if cmd['item_pred'] not in self.df_landmark['name'].values:
-            print "invalid command: [%s]" % cmd['item_pred']
-            cmd['status'] = 'invalid command'
-            return 
-        
-        # plan motions for command
-        # print 'motion planning for command: \n', cmd
-        motion = {}
-        motion['item_id'] = cmd['item_id']
-        motion['item_pred'] = cmd['item_pred']
-        motion['status'] = 'to_do'
-        motion['timestamp'] = datetime.now().strftime('%H:%M:%S:%f')[:-4]
-
-        # go to this pose
-        motion['step'] = 0
-        motion['motion'] = 'goto_joint,%s' % motion['item_pred']
-        self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
-
-        if motion['item_pred'] in ['ready', 'home', 'deliver_up', 'deliver_down']:
-            pass
-        else:
-            motion['step'] += 1
-            motion['motion'] = 'turn_on_magnet'
-            self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
-
-            motion['step'] += 1
-            motion['motion'] = 'goto_pose,%s,0.03' % motion['item_pred']
-            self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
-
-            motion['step'] += 1
-            motion['motion'] = 'goto_joint,deliver_up'
-            self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
-
-            motion['step'] += 1
-            motion['motion'] = 'turn_off_magnet'
-            self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
- 
-            if motion['item_pred'] not in ['tape', 'marker', 'left stile', 'right stile']:
-                motion['step'] += 1
-                motion['motion'] = 'goto_joint,deliver_down'
-                self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
-
-                if motion['item_pred'][:9] == 'thumbtack':
-                    motion['step'] += 1
-                    motion['motion'] = 'goto_joint,deliver_up' # works very well!!!
-                    self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
-
-            motion['step'] += 1
-            motion['motion'] = 'goto_joint,ready'
-            self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
-
-        cmd['status'] = 'motion planning finished'
 
     def wam_joint_states_msg_callback(self, msg):
         self.wam_joint_states = msg.position
@@ -210,55 +147,52 @@ class MOTION_CONTROL:
         # print ">>> reached joint pose: %s" % item_name        
            
     def run(self):
-        # print_wait_for_command = True
-        print '| id |     item     | step |           motion           | status |    time     |'
+        print_wait_for_command = True
         while not rospy.is_shutdown():
-            # find planned motions whose "status" is "to_be_executed"
-            to_do_motions = self.motion_queue.loc[self.motion_queue['status'] == 'to_do']
+            # find to_do tasks whose "status" is "wait_in_queue"
+            to_do_cmds = self.cmd_queue.loc[self.cmd_queue['status'] == 'wait_in_queue']
             
-            # check to see if there are any to_do motion
-            if len(to_do_motions) == 0:
-                # if print_wait_for_command:
-                #     print "waiting for new planned motions..."
-                #     print_wait_for_command = False
+            # check to see if there are any to_do tasks
+            if len(to_do_cmds) == 0:
+                if print_wait_for_command:
+                    print "waiting for new command request..."
+                    print_wait_for_command = False
                 continue
 
-            # find the first motion that is not finished
-            motion = to_do_motions.iloc[0]
-            motion_index = to_do_motions.iloc[[0]].index
-
-            # execute motion
-            # print '| %-2i | %-12s |  %-2i  | %-26s | %-6s | %10s |' % (motion['item_id'], motion['item_pred'], motion['step'], 
-                    # motion['motion'], motion['status'], motion['timestamp'])            
-            motion_cmd = motion['motion']
-            if motion_cmd == 'turn_on_magnet':
-                self.arduino.setMagnet(5)
-            elif motion_cmd == 'turn_off_magnet':
-                self.arduino.setMagnet(0)
-            elif motion_cmd[:10] == 'goto_joint': 
-                item = motion_cmd.split(',')[-1]
-                self.goto_joint(item)
-            elif motion_cmd[:9] == 'goto_pose':
-                item = motion_cmd.split(',')[-2]
-                z_above = float(motion_cmd.split(',')[-1])
-                self.goto_pose(item, z_above) 
+            # find the first task that is not finished
+            cmd = to_do_cmds.iloc[0]
+            cmd_index = to_do_cmds.iloc[[0]].index
+            
+            # check invalid command
+            if cmd['item_pred'] not in self.df_landmark['name'].values:
+                print "invalid command: [%s]" % cmd['item_pred']
+                self.cmd_queue.at[cmd_index, 'status'] = 'invalid command'
+                print_wait_for_command = True
+                continue
+            
+            # execute command
+            print '----------------'
+            print 'execute command: \n', cmd
+            time_s = time.time()
+            self.goto_joint(cmd['item_pred'])
+            if cmd['item_pred'] in ['ready', 'home', 'deliver_up', 'deliver_down']:
+                pass
             else:
-                print "unrecognized motion command %s" % motion_cmd
+                self.arduino.setMagnet(5)
+                self.goto_pose(cmd['item_pred'], z_above = 0.03) 
+                self.goto_joint("deliver_up")
+                self.arduino.setMagnet(0)
+                if cmd['item_pred'] not in ['tape', 'marker', 'left stile', 'right stile']:
+                    self.goto_joint("deliver_down")
+                    if cmd['item_pred'][:9] == 'thumbtack':
+                        self.goto_joint("deliver_up") # works very well!!!
+                self.goto_joint("ready")
+            self.cmd_queue.at[cmd_index, 'status'] = 'done'
+            print "executation finished after %.3f seconds" % (time.time()-time_s)
+            print_wait_for_command = True
 
-            # change status
-            self.motion_queue.at[motion_index, 'status'] = 'done'
-            self.motion_queue.at[motion_index, 'timestamp'] = datetime.now().strftime('%H:%M:%S:%f')[:-4]
-            motion['status'] = 'done'
-            motion['timestamp'] = datetime.now().strftime('%H:%M:%S:%f')[:-4]
-            
-            # print result motion
-            print '| %-2i | %-12s |  %-2i  | %-26s | %-6s | %10s |' % (motion['item_id'], motion['item_pred'], motion['step'], 
-                    motion['motion'], motion['status'], motion['timestamp'])
-            
         print "----\ncmd queue:\n", self.cmd_queue
-        print "----\nmotion queue:\n", self.motion_queue
         
-
 def main():
     motion_control = MOTION_CONTROL()
     motion_control.load_landmarks('/home/tzhou/Workspace/catkin_ws/src/ttp/data/joint_cart.csv')

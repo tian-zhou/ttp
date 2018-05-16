@@ -71,7 +71,7 @@ class TTP:
         print '(grace?) exit with message:'
         print '---\n', exit_msg, '\n---'
         if gohome:
-            self.cmd_pub.publish('1,home,1.00,2018_04_30_19_49_32_983000, NA')
+            self.cmd_pub.publish('1,home,1.00,19:49:32:00, NA')
             print "go home robot you are drunk..."
         print "cmd history:"
         for c in self.cmd_request_history:
@@ -169,13 +169,13 @@ class TTP:
         else:
             msg += '%s,' % item
         msg += '%.2f,' % intent
-        msg += '%s,' % datetime.now().strftime('%Y_%m_%d_%H_%M_%S_%f')
+        msg += '%s,' % datetime.now().strftime('%H:%M:%S:%f')[:-4] # %Y_%m_%d_%H_%M_%S_%f
         msg += '%s' % comment
         self.item_id += (1 if intent == 1 else 0)
         self.cmd_request_history.append(msg)
         return msg
         
-    def run_tele(self):
+    def run_keyboard(self):
         """
         in this case, for every entry of command, we publish one message
         and we are sure of the intent (always 1)
@@ -198,10 +198,10 @@ class TTP:
             if item in mapping:
                 print "translate command [%s] => [%s]" % (item, mapping[item])
                 item = mapping[item]
-            msg = self.make_command_msg(item, intent=1, comment='teleop')
+            msg = self.make_command_msg(item, intent=1, comment='keyboard')
             if msg:
                 self.cmd_pub.publish(msg)
-        self.grace_exit('teleoperation finished...', gohome=True)
+        self.grace_exit('keyboard control finished...', gohome=True)
     
     def decode_word(self, word):
         """
@@ -328,13 +328,13 @@ class TTP:
                 self.cmd_pub.publish(msg)
                 print 'publish message: [%s]' % msg
                 print '========================='
-        self.grace_exit('early prediction finished...', gohome=False)
+        self.grace_exit('tt prediction finished...', gohome=False)
         
     def run(self, mode):
-        if mode not in ['tt', 'speech', 'teleop']:
+        if mode not in ['tt', 'speech', 'keyboard']:
             rospy.logerr('unrecognized TTP mode %s' % mode)
-        if mode == 'teleop':
-            self.run_tele()
+        if mode == 'keyboard':
+            self.run_keyboard()
         elif mode == 'speech':
             self.run_speech()
         elif mode == 'tt':
@@ -345,7 +345,7 @@ def main():
                  fs_path = '/home/tzhou/Workspace/turn_taking/chair_github/model/features/one_model_select_feat_names.csv',
            landmark_path = '/home/tzhou/Workspace/catkin_ws/src/ttp/data/joint_cart.csv',
                task_path = '/home/tzhou/Workspace/catkin_ws/src/ttp/data/fix_chair_order.csv')
-    ttp.run(mode='tt') # ['teleop', 'speech', 'tt']
+    ttp.run(mode='keyboard') # ['keyboard', 'speech', 'tt']
 
 if __name__ == '__main__':
     main()
