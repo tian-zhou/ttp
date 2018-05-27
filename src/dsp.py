@@ -42,13 +42,23 @@ class DSP:
         # for some reason, sometimes the pac will contain some weird chars at the end of the buffer
         # we should remove them
         # solution -> find first abcd1234, and trim all stuff after that
-        pac = pac[:pac.find('abcd1234')]
-        pac = pac.split()
-        pac[0] = pac[0][-23:] # just took the time out
-        # print pac 
+        if 0:
+            # old format for the human-human experiment
+            pac = pac[:pac.find('abcd1234')]
+            pac = pac.split()
+            pac[0] = pac[0][-23:] # just took the time out
+        else:
+            # new format after 5/16/2018, used for final real-time processing
+            # pac = pac[(pac.find('wxyz9753')+9):pac.find('abcd1234')]
+            pac = pac.split()
+            
+        # print pac
         # print '\n\n'
         # print "len(pac)", len(pac)
         # print "len(feat_names)", len(self.feat_names)
+        if len(pac) != len(self.feat_names):
+            return None
+            
         df0 = pd.DataFrame([pac], columns = self.feat_names)
         # print df0
         # print df0['realtime_str']

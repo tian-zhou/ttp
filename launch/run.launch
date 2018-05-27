@@ -1,10 +1,9 @@
 <launch>
-    <!-- play back the recorded bag for multimodal data -->
-    <node pkg="rosbag" type="play" name="multimodal" output="screen" args="--quiet --loop --clock /home/tzhou/Workspace/catkin_ws/src/ttp/bag/run1.bag"/>
-
-    <!-- python script: communicate with wam robot-->
+    <node pkg="ttp" type="mm_bridge.py" output="screen" name="mm_bridge" />
     <node pkg="ttp" type="wam.py" output="screen" name="wam" />
-
+    <node pkg="ttp" type="motion_control.py" output="screen" name="motion_control" />
+    <node pkg="ttp" type="GUI.py" output="screen" name="GUI" />
+    
     <!-- =========================================== -->
     <!-- ALL following about WAM simulation and rviz -->
     <!-- =========================================== -->

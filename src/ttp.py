@@ -24,6 +24,7 @@ License:
     GNU General Public License v3
 """
 
+import sys
 import matplotlib.pyplot as plt
 import rospy
 from std_msgs.msg import Float32, String, Float32MultiArray
@@ -66,12 +67,13 @@ class TTP:
         # init the subscriber at the end when all init is finished
         rospy.Subscriber("mm_bridge_output", String, self.mm_msg_callback)
                 
+        
     def grace_exit(self, exit_msg, gohome):
         print "!" * 20
         print '(grace?) exit with message:'
         print '---\n', exit_msg, '\n---'
         if gohome:
-            self.cmd_pub.publish('1,home,1.00,19:49:32:00, NA')
+            self.cmd_pub.publish('0|home|1.00|15:57:42:87|keyboard')
             print "go home robot you are drunk..."
         print "cmd history:"
         for c in self.cmd_request_history:
@@ -107,6 +109,10 @@ class TTP:
     def mm_msg_callback(self, msg):
         # decode the msg into the format that we want
         df = self.dsp.decode_packet(msg.data)
+        if df is None:
+            print 'invalid mm msg packet, unequal pac length'
+            return
+
         x = df.loc[0].values.flatten() # shape (num_raw_columns,)
 
         self.dsp.clip_outlier(x) 
@@ -129,7 +135,7 @@ class TTP:
 
     def intent_pred(self):
         if len(self.f_buf) < self.f_buf_size:
-            return -1
+            return 0
         # the intent_pred is very fast (takes about 0.01 second)    
         x_test = np.array(self.f_buf).reshape(1, self.f_buf_size, self.feat_dim)
         y_test_pred_prob = self.model.predict(x_test, batch_size=1)[0]
@@ -139,6 +145,9 @@ class TTP:
     def item_pred(self):
         # first, let us fix the order to dictate the steps
         to_do_tasks = self.df_task.loc[self.df_task['status'] == 'to_do']
+        if len(to_do_tasks) == 0:
+            print "all tasks finished..."
+            return 'done'
         item = to_do_tasks.iloc[0]['part_name']
         return item
 
@@ -153,25 +162,25 @@ class TTP:
             print "invalid command: [%s]" % item
             return ''
 
-        msg = '%s,' % self.item_id
+        msg = '%s|' % self.item_id
         if item == 'rail':
-            msg += '%s%i,' % (item, self.rail_id)
-            self.rail_id += (1 if intent == 1 else 0)
+            msg += '%s%i|' % (item, self.rail_id)
+            self.rail_id += 1
             if self.rail_id == 8:
                 print "Run out of rails! Cannot pick!"
                 return ''
         elif item == 'thumbtack':
-            msg += '%s%i,' % (item, self.thumbtack_id)
-            self.thumbtack_id += (1 if intent == 1 else 0)
+            msg += '%s%i|' % (item, self.thumbtack_id)
+            self.thumbtack_id += 1
             if self.thumbtack_id == 18:
                 print "Run out of thumbtacks! Cannot pick!"
                 return ''
         else:
-            msg += '%s,' % item
-        msg += '%.2f,' % intent
-        msg += '%s,' % datetime.now().strftime('%H:%M:%S:%f')[:-4] # %Y_%m_%d_%H_%M_%S_%f
+            msg += '%s|' % item
+        msg += '%.2f|' % intent
+        msg += '%s|' % datetime.now().strftime('%H:%M:%S:%f')[:-4] # %Y_%m_%d_%H_%M_%S_%f
         msg += '%s' % comment
-        self.item_id += (1 if intent == 1 else 0)
+        self.item_id += 1
         self.cmd_request_history.append(msg)
         return msg
         
@@ -201,7 +210,7 @@ class TTP:
             msg = self.make_command_msg(item, intent=1, comment='keyboard')
             if msg:
                 self.cmd_pub.publish(msg)
-        self.grace_exit('keyboard control finished...', gohome=True)
+        self.grace_exit('keyboard control finished...', gohome=False)
     
     def decode_word(self, word):
         """
@@ -239,6 +248,8 @@ class TTP:
         print 'listening...'
         thres = 0.1
         low_thres = 0.05
+        print "thres: %.2f" % thres
+        print "low_thres: %.2f" % low_thres
         for phrase in speech:
             if rospy.is_shutdown():
                 break
@@ -251,51 +262,51 @@ class TTP:
             print 'recognized word [%s] with confi [%.2f]' % (item, confi)
             msg = self.make_command_msg(item, intent=1, comment='speech')
             if msg:
-                self.cmd_pub.publish(msg)
-                print 'publish message: [%s]' % msg
+                # self.cmd_pub.publish(msg)
+                print '(no) publish message: [%s]' % msg
                 print '========================='
         self.grace_exit('speech control finished...', gohome=False)
 
     def check_fire(self, intent_history, time_history, confi_thres, active_duration_thres, 
                     fire_interval_thres):
         """
-        first, set a look-back window length (e.g., 3 seconds)
-        smooth the history signal in this period
-
-        ===
-        method 1: find local maximum, and if the value at local maximum exceeds
-        a confidence threshold, we fire, and start silencing.
-            problem: if the confi keeps increasing and never reaches local maximum,
-            we cannot fire.
-
-        ===
-        method 2: find the duration where confi exceeds a confidence threshold, 
+        === used, looks good overall!!!! 
+        method 1: find the duration where confi exceeds a confidence threshold, 
         if this continuous duration is longer than a window threshold, we fire.
             problem: have to work together with the silencing scheme, otherwise
             we will see multiple firing for the same turn request action
+
+        === not used 
+        method 2: find local maximum, and if the value at local maximum exceeds
+        a confidence threshold, we fire, and start silencing.
+            problem: if the confi keeps increasing and never reaches local maximum,
+            we cannot fire.
         """
         N = len(intent_history)
-        for i in range(N-1, -1, -1):
+        hz = 20.0
+        for i in range(N-1, max(-1, N-100), -1):
             if intent_history[i] > confi_thres:
-                if time() - time_history[i] >= active_duration_thres:
-                    if time() - self.last_fire_time > fire_interval_thres:
-                        if 1:
-                            plt.plot(range(N), confi_thres*np.ones(N), 'g', label='threshold')
-                            plt.plot(range(0, i), intent_history[:i], 'b', label = 'inactive')
-                            plt.plot(range(i, N), intent_history[i:], 'r', label = 'active')
-                            plt.xlabel('discrete time index')
+                if time_history[-1] - time_history[i] >= active_duration_thres:
+                    if time_history[-1] - self.last_fire_time > fire_interval_thres:
+                        if 0:
+                            plt.plot(np.arange(N)/hz, confi_thres*np.ones(N), 'g', label='threshold')
+                            plt.plot(np.arange(0, i)/hz, intent_history[:i], 'b', label = 'inactive')
+                            plt.plot(np.arange(i, N)/hz, intent_history[i:], 'r', label = 'active')
+                            plt.xlabel('time (in seconds)')
                             plt.ylabel('intent history')
                             plt.legend(loc='best')
                             plt.show()
                         self.last_fire_time = time()
-                        print "fired at time: ", datetime.now()
+                        # print "fired at time: ", datetime.now()
+                        print "intent: [%.2f], fire!!!" % intent_history[-1]
                         return True
                     else:
                         remain_time = fire_interval_thres - (time() - self.last_fire_time)
-                        print "waiting for silence period to pass, %.2f seconds left" % remain_time
+                        print "intent: [%.2f], wait for silence period to pass, %.2f sec left" % (intent_history[-1], remain_time)
                         return False
             else:
                 break
+        print "intent: [%.2f], not high enough..." % intent_history[-1]
         return False
 
     def run_tt(self):
@@ -305,26 +316,50 @@ class TTP:
         we don't always publish them, but only publish when necessary
         need to think about it        
         """
-        rate = rospy.Rate(10)
+        rate = rospy.Rate(20)
         intent_history = []
         time_history = []
+        time_past = []
         print "waiting for feature buffer to be fully inited (need 120 steps)..."
+        f = plt.figure()
+        ax = f.gca()
+        f.show()
+        ax.set_xlabel('past time in seconds')
+        ax.set_ylabel('intent history')
+        ax.set_ylim([0, 1])
+        t0 = time()
+
+        # === some parameters ===
+        fire_interval_thres = 10 # 12 to be conservative, make it 10 to be faster. For subject 1,2,3 it is 12
+        confi_thres = 0.4 # 0.5 to be conservative, notice that 0.5 does not work well with some subjects. Use 0.4!
+        active_duration_thres = 0.3 # 0.5 to be conservative
         while not rospy.is_shutdown():
             item = self.item_pred()
+            if item == 'done':
+                break
             intent = self.intent_pred()
-            rate.sleep()
-            if intent == -1:
-                continue
+            # rate.sleep()
             intent_history.append(intent)
             time_history.append(time())
-            if self.check_fire(intent_history, time_history, confi_thres = 0.8, active_duration_thres = 0.5, 
-                        fire_interval_thres = 12):
+            time_past.append(time() - t0)
+            if len(intent_history) < 10:
+                continue
+
+            # do some plot
+            ax.plot(time_past[-2:], intent_history[-2:], 'r-', linewidth=5)
+            ax.plot(time_past[-2:], [confi_thres, confi_thres], 'b-', linewidth=2)
+            xlim_min = 0 if len(time_past) < 100 else time_past[-1] - 10 # show 10 seconds
+            ax.set_xlim([xlim_min, time_past[-1]])
+            f.canvas.draw()
+            if self.check_fire(intent_history, time_history, confi_thres, active_duration_thres, 
+                        fire_interval_thres): 
+                # 12 is good in practice, 6 is good in debug (no robot motion) 
                 # confi_thres in range [0.5, 0.99], the larger, the more misses but more accurate
                 # active_duration_thres = 0.5 # high value for > 0.5 seconds
                 # fire_interval_thres = 12 # 12 seconds: 7 sec for pickup/delivery, and 5 sec for operation
                 msg = self.make_command_msg(item, intent=1, comment='early tt prediction')
                 self.df_task.loc[self.df_task['part_name'] == item, 'status'] = 'done'
-                print self.df_task
+                # print self.df_task
                 self.cmd_pub.publish(msg)
                 print 'publish message: [%s]' % msg
                 print '========================='
@@ -345,7 +380,10 @@ def main():
                  fs_path = '/home/tzhou/Workspace/turn_taking/chair_github/model/features/one_model_select_feat_names.csv',
            landmark_path = '/home/tzhou/Workspace/catkin_ws/src/ttp/data/joint_cart.csv',
                task_path = '/home/tzhou/Workspace/catkin_ws/src/ttp/data/fix_chair_order.csv')
-    ttp.run(mode='keyboard') # ['keyboard', 'speech', 'tt']
+    mode = sys.argv[1].lower()
+    print "argument mode: [%s]" % mode
+    assert(mode in ['keyboard', 'speech', 'tt'])
+    ttp.run(mode=mode) # ['keyboard', 'speech', 'tt']
 
 if __name__ == '__main__':
     main()

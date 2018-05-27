@@ -38,7 +38,9 @@ def pprint(name, l):
     print name + ': ' + l_str
 
 class MOTION_CONTROL:
-    def __init__(self):
+    def __init__(self, debug_no_WAM):
+        self.debug_no_WAM = debug_no_WAM
+
         # init node for mm_bridge
         rospy.init_node('motion_control_node')
 
@@ -51,7 +53,9 @@ class MOTION_CONTROL:
         
         # init the publisher for sending to MoveWAM
         self.wam_command_pub = rospy.Publisher('wam_command', String, queue_size=10)
-        self.wam_command_msg = String()
+        
+        # init the publisher for sending planned motions
+        self.motion_plan_pub = rospy.Publisher('motion_plan_pub', String, queue_size=10)
         
         # subscribe to current joint states
         rospy.Subscriber("joint_states", JointState, self.wam_joint_states_msg_callback)
@@ -72,6 +76,8 @@ class MOTION_CONTROL:
         # cv2.imshow('WAM control', self.img_happy)
         # cv2.waitKey(1)
 
+        rospy.Subscriber("abort_command_pub", String, self.abort_command_msgcb)
+
         print "init finished, waiting for motion control command..."
         
     def load_landmarks(self, landmark_path):
@@ -80,17 +86,63 @@ class MOTION_CONTROL:
         # print 'loaded landmark_path at: %s' % landmark_path   
         # print self.df_landmark['name'].to_string(index=False)
 
+    def abort_command_msgcb(self, msg):
+        msg_split = msg.data.split('|')
+        assert (len(msg_split) == 3)
+        assert (msg_split[0] == 'abort')
+        cmd_id = int(msg_split[1])
+        cmd_name = msg_split[2]
+        # print "cmd_id [%i], cmd_name [%s]" % (cmd_id, cmd_name)
+        # === abort in cmd_queue ===
+        # print 'cmd_queue before aborting...\n', self.cmd_queue
+        abort_cmd_idx = self.cmd_queue.loc[(self.cmd_queue['item_id'] == cmd_id) & 
+                           (self.cmd_queue['item_pred'] == cmd_name)].index
+        self.cmd_queue.at[abort_cmd_idx, 'status'] = 'aborted_GUI'
+        self.cmd_queue.at[abort_cmd_idx, 'timestamp'] = datetime.now().strftime('%H:%M:%S:%f')[:-4]
+        # print 'cmd_queue after  aborting...\n', self.cmd_queue
+
+        # === abort in cmd_queue ===
+        # print 'motion_queue before aborting\n', self.motion_queue
+        abort_motion_idx = self.motion_queue.loc[(self.motion_queue['item_id'] == cmd_id) & 
+                           (self.motion_queue['item_pred'] == cmd_name) & 
+                           (self.motion_queue['status'].isin(['to_do', 'to_do_last']))].index
+        self.motion_queue.at[abort_motion_idx, 'status'] = 'aborted_GUI'
+        self.motion_queue.at[abort_motion_idx, 'timestamp'] = datetime.now().strftime('%H:%M:%S:%f')[:-4]
+        # print 'motion_queue after aborting\n', self.motion_queue
+
+        # go_back to ready, turn-off magnet
+        # turn on if we found the WAM and arduino
+        # !!!!!!!!!!!!!!!!!!!!!!!!! notice !!!!!!
+        # be careful!!!!!
+        if not self.debug_no_WAM:
+            self.goto_joint('ready')
+            self.arduino.setMagnet(0)
+        else:
+            print "go to ready!!! (debug mode)"
+            print "turn off magnet!!! (debug mode)"
+
     def cmd_msg_callback(self, msg):
-        msg_split = msg.data.split(',')
+        msg_split = msg.data.split('|')
         cmd = {}
         cmd['item_id'] = int(msg_split[0])
         cmd['item_pred'] = msg_split[1]
         cmd['intent_pred'] = float(msg_split[2])
         cmd['timestamp'] = msg_split[3]
         cmd['comment'] = msg_split[4]
-        cmd['status'] = 'command arrived'
-        cmd = self.motion_plan(cmd)
+        cmd['status'] = 'received'
+        self.motion_plan(cmd)
         self.cmd_queue = self.cmd_queue.append(cmd, ignore_index=True)
+
+    def add_publish_motion(self, motion, pub_only = False):
+        if not pub_only:
+            motion['step'] += 1
+            self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
+
+        # make the message and then publish it
+        # ['item_id', 'item_pred', 'step', 'motion', 'status', 'timestamp']
+        msg = ' %-2i | %-12s |  %-2i  | %-26s | %-6s | %10s ' % (motion['item_id'], motion['item_pred'], motion['step'], 
+                    motion['motion'], motion['status'], motion['timestamp'])
+        self.motion_plan_pub.publish(msg)
 
     def motion_plan(self, cmd):
         # self.motion_queue = pd.DataFrame(columns = ['item_id', 'item_pred', 'step', 
@@ -109,46 +161,40 @@ class MOTION_CONTROL:
         motion['item_pred'] = cmd['item_pred']
         motion['status'] = 'to_do'
         motion['timestamp'] = datetime.now().strftime('%H:%M:%S:%f')[:-4]
+        motion['step'] = -1
 
         # go to this pose
-        motion['step'] = 0
         motion['motion'] = 'goto_joint,%s' % motion['item_pred']
-        self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
+        self.add_publish_motion(motion)
 
         if motion['item_pred'] in ['ready', 'home', 'deliver_up', 'deliver_down']:
             pass
         else:
-            motion['step'] += 1
             motion['motion'] = 'turn_on_magnet'
-            self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
-
-            motion['step'] += 1
+            self.add_publish_motion(motion)
+        
             motion['motion'] = 'goto_pose,%s,0.03' % motion['item_pred']
-            self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
-
-            motion['step'] += 1
+            self.add_publish_motion(motion)
+        
             motion['motion'] = 'goto_joint,deliver_up'
-            self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
-
-            motion['step'] += 1
+            self.add_publish_motion(motion)
+        
             motion['motion'] = 'turn_off_magnet'
-            self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
- 
+            self.add_publish_motion(motion)
+        
             if motion['item_pred'] not in ['tape', 'marker', 'left stile', 'right stile']:
-                motion['step'] += 1
                 motion['motion'] = 'goto_joint,deliver_down'
-                self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
-
+                self.add_publish_motion(motion)
+        
                 if motion['item_pred'][:9] == 'thumbtack':
-                    motion['step'] += 1
                     motion['motion'] = 'goto_joint,deliver_up' # works very well!!!
-                    self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
-
-            motion['step'] += 1
+                    self.add_publish_motion(motion)
+        
             motion['motion'] = 'goto_joint,ready'
-            self.motion_queue = self.motion_queue.append(motion, ignore_index=True)
-
-        cmd['status'] = 'motion planning finished'
+            motion['status'] = 'to_do_last'
+            self.add_publish_motion(motion)
+        
+        cmd['status'] = 'motion planned'
 
     def wam_joint_states_msg_callback(self, msg):
         self.wam_joint_states = msg.position
@@ -214,7 +260,7 @@ class MOTION_CONTROL:
         print '| id |     item     | step |           motion           | status |    time     |'
         while not rospy.is_shutdown():
             # find planned motions whose "status" is "to_be_executed"
-            to_do_motions = self.motion_queue.loc[self.motion_queue['status'] == 'to_do']
+            to_do_motions = self.motion_queue.loc[self.motion_queue['status'].isin(['to_do', 'to_do_last'])]
             
             # check to see if there are any to_do motion
             if len(to_do_motions) == 0:
@@ -224,43 +270,52 @@ class MOTION_CONTROL:
                 continue
 
             # find the first motion that is not finished
-            motion = to_do_motions.iloc[0]
-            motion_index = to_do_motions.iloc[[0]].index
-
+            motion_index = to_do_motions.head(1).index[0]
+            
             # execute motion
             # print '| %-2i | %-12s |  %-2i  | %-26s | %-6s | %10s |' % (motion['item_id'], motion['item_pred'], motion['step'], 
-                    # motion['motion'], motion['status'], motion['timestamp'])            
-            motion_cmd = motion['motion']
-            if motion_cmd == 'turn_on_magnet':
-                self.arduino.setMagnet(5)
-            elif motion_cmd == 'turn_off_magnet':
-                self.arduino.setMagnet(0)
-            elif motion_cmd[:10] == 'goto_joint': 
-                item = motion_cmd.split(',')[-1]
-                self.goto_joint(item)
-            elif motion_cmd[:9] == 'goto_pose':
-                item = motion_cmd.split(',')[-2]
-                z_above = float(motion_cmd.split(',')[-1])
-                self.goto_pose(item, z_above) 
-            else:
-                print "unrecognized motion command %s" % motion_cmd
+            #         motion['motion'], motion['status'], motion['timestamp'])       
+
+            if self.debug_no_WAM:
+                time.sleep(0.5)
+            else:     
+                motion_cmd = self.motion_queue.at[motion_index, 'motion']
+                if motion_cmd == 'turn_on_magnet':
+                    self.arduino.setMagnet(5)
+                elif motion_cmd == 'turn_off_magnet':
+                    self.arduino.setMagnet(0)
+                elif motion_cmd[:10] == 'goto_joint': 
+                    item = motion_cmd.split(',')[-1]
+                    self.goto_joint(item)
+                elif motion_cmd[:9] == 'goto_pose':
+                    item = motion_cmd.split(',')[-2]
+                    z_above = float(motion_cmd.split(',')[-1])
+                    self.goto_pose(item, z_above) 
+                else:
+                    print "unrecognized motion command %s" % motion_cmd
 
             # change status
-            self.motion_queue.at[motion_index, 'status'] = 'done'
+            status = self.motion_queue.at[motion_index, 'status']
+            if status == 'to_do':
+                self.motion_queue.at[motion_index, 'status'] = 'done'
+            elif status == 'to_do_last':
+                self.motion_queue.at[motion_index, 'status'] = 'done_last'
+            elif status == 'aborted_GUI':
+                self.motion_queue.at[motion_index, 'status'] = 'needs_revoking'
             self.motion_queue.at[motion_index, 'timestamp'] = datetime.now().strftime('%H:%M:%S:%f')[:-4]
-            motion['status'] = 'done'
-            motion['timestamp'] = datetime.now().strftime('%H:%M:%S:%f')[:-4]
+            motion = self.motion_queue.loc[motion_index].to_dict()
+            self.add_publish_motion(motion, pub_only = True)
             
-            # print result motion
             print '| %-2i | %-12s |  %-2i  | %-26s | %-6s | %10s |' % (motion['item_id'], motion['item_pred'], motion['step'], 
                     motion['motion'], motion['status'], motion['timestamp'])
-            
-        print "----\ncmd queue:\n", self.cmd_queue
-        print "----\nmotion queue:\n", self.motion_queue
+        
+        print "\n\n"
+        print "-----cmd queue-----\n", self.cmd_queue
+        print "-----motion queue-----\n", self.motion_queue
         
 
 def main():
-    motion_control = MOTION_CONTROL()
+    motion_control = MOTION_CONTROL(debug_no_WAM=False)
     motion_control.load_landmarks('/home/tzhou/Workspace/catkin_ws/src/ttp/data/joint_cart.csv')
     motion_control.run()
 

@@ -44,8 +44,12 @@ class ARDUINO():
             except:
                 pass
         if len(res) == 0:
-            print "Arduino not found...exit..."
-            exit(1)
+            # print "Arduino not found...exit..."
+            # exit(1)
+            print '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+            print "Arduino not found...return..."
+            print '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+            return
         else:
             print "available ports: ", res
 

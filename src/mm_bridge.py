@@ -50,8 +50,9 @@ class MM_BRIDGE:
 
         # connection to hostname on the port.
         re_try = 1
-        while re_try:
+        while re_try and not rospy.is_shutdown():
             try:
+                print "Trying to connect to %s:%s" % (host, port)
                 self.socket.connect((host, port))
                 re_try = 0
             except:
@@ -67,7 +68,7 @@ class MM_BRIDGE:
         while not rospy.is_shutdown():
             # get a packet from Multimodal.exe
             if 0:
-                pac = '2017_10_13_18_08_15_774 2.34 3.42 4.244 3.44 3.221 -2.11 -2.09 abcd1234 '
+                pac = 'wxyz9753 2017_10_13_18_08_15_774 2.34 3.42 4.244 3.44 3.221 -2.11 -2.09 abcd1234 '
             else:
                 # Receives self.buflen chars
                 pac = self.socket.recv(self.buflen)
@@ -76,16 +77,17 @@ class MM_BRIDGE:
                 bytesSent = self.socket.send('Got it!\0')
                 
             # publish the package
+            pac = pac[(pac.find('wxyz9753')+9):pac.find('abcd1234')]
             self.pub.publish(pac)
             rate.sleep()
 
             # print something
-            rospy.loginfo("received %i length Multimodal packet, publish to ROS..." % len(pac))
+            # rospy.loginfo("received %i length Multimodal packet, publish to ROS..." % len(pac))
             # rospy.loginfo('send ack back with len %i' % bytesSent)
 
 
 if __name__ == '__main__':
     mm_bridge = MM_BRIDGE()
-    mm_bridge.init_socket(host='128.46.125.47', port=12345, buflen=4096)
+    mm_bridge.init_socket(host='128.46.125.47', port=12345, buflen=2048)
     mm_bridge.run()
 

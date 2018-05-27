@@ -33,7 +33,6 @@ import socket
 import numpy as np
 
 
-
 def pprint(name, l):
     l_str = ''.join(['%.3f ' % item for item in l])
     print name + ': ' + l_str
@@ -83,7 +82,7 @@ class WAM:
 
         # connection to hostname on the port.
         re_try = 1
-        while re_try:
+        while re_try and not rospy.is_shutdown():
             try:
                 self.socket.connect((host, port))
                 re_try = 0
